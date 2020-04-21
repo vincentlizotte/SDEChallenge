@@ -49,4 +49,29 @@ However, by using memoization, it is possible to get the best of both worlds: on
 
 ## Design Question
 
-Not done yet
+The purpose of the analytics system is to gather information about usage patterns, for example how users interact with a website or app.
+
+This design is about the backend part, but we still need to describe a bit of the front-end part to at least understand what is being communicated.
+
+### Front-end
+
+The website or app will run code to gather user interactions and regularly transmit them to the backend. The payload could have these fields:
+ - `sessionId`: a unique identifier generated when the user starts using the website, to link together multiple payloads as being part of the same session
+ - `userInfo`: a collection of data about the user, such as browser signature, locale, device type, etc
+ -` dateTimeLocal` and `dateTimeUtc`: when the event took place
+ - `analyticsCustomerId`: identifies the owner of the website within our system
+ - `url`: which page the user is on
+ - `action`: what the user did. Possible values could be “pageLoaded”, “linkClicked”, “navigatedBack”, etc
+ - `actionParameters`: extra details specific to the triggering action, such as the link clicked, the mouse cursor position, how far the user scrolled down the page, etc
+
+### Back-end
+
+Our back-end will make use of a message queue to process these requests. It is a scalable system that allows for efficient batch processing of messages, albeit not necessarily in real time. Let’s use Kafka as an example. After hitting our API through a load balancer, messages will be queued in our Kafka cluster: this is the Producer part. The partition key could be the `sessionId`: this way, messages will be randomly distributed but related ones will live on the same system.
+ 
+On the consumer side, we could have Spark jobs consuming these messages and performing aggregation. It makes sense to aggregate by `analyticsCustomerId`: the main use-case is merchants querying data for their business. There will be very little, if any, queries across multiple customers, so each customer’s data can essentially live in isolation. These Spark jobs can easily be set to run at least every half-hour to maintain our analytics up-to-date.
+
+For storage, a time-series database such as Prometheus would allow efficient querying. We can store transformed data that matches the way it will be queried, making it fast to retrieve. Then a dashboard / data visualization tool such as Grafana can connect to Prometheus for querying and display purposes.
+
+If we ever encountered a bug in the processing logic, we would need access to the original raw messages for reprocessing. We can have another Kafka consumer that simply dumps the individual messages to an append-only table in a database such as Cassandra. We can also set Kafka’s persistence to a high enough value that several days worth of data is kept before being overwritten by newer entries, so we wouldn’t even need to touch Cassandra if the errors are recent.
+ 
+All these Apache tools can be coordinated through ZooKeeper, which ensures stability and reliability, thus minimum downtime. 
